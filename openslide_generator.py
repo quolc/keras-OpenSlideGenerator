@@ -64,6 +64,9 @@ class OpenSlideGenerator(object):
         # OpenSlide objects
         self.slides = []
 
+        # log
+        self.fetch_count = [] # region-wise
+
         # states for parsing input text file
         # 0: waiting for new file entry
         # 1: waiting for region header or svs entry
@@ -277,6 +280,15 @@ class OpenSlideGenerator(object):
         print('patches per epoch is set to {}.'.format(self.patch_per_epoch))
         print()
 
+        self.reset_fetch_count()
+
+    def reset_fetch_count(self):
+        self.fetch_count = []
+        for slide in self.structure:
+            self.fetch_count.append([])
+            for _ in slide:
+                self.fetch_count[-1].append(0)
+
     def __len__(self):
         return self.patch_per_epoch
 
@@ -326,15 +338,18 @@ class OpenSlideGenerator(object):
         return winding_number != 0
 
     def get_example(self, i):
+        first_loop = True
         while True:
             # select a triangle by the current fetch-mode
             if self.fetch_mode == 'area':
                 slide_id, region_id, tri_id = self._get_random_index_all()
             elif self.fetch_mode == 'slide':
-                slide_id = random.randint(0, len(self.structure) - 1)
+                if first_loop: # prevent bias
+                    slide_id = random.randint(0, len(self.structure) - 1)
                 region_id, tri_id = self._get_random_index_slide(slide_id)
             elif self.fetch_mode == 'label':
-                label = random.choice(list(self.label_weights.keys()))
+                if first_loop: # prevent bias
+                    label = random.choice(list(self.label_weights.keys()))
                 slide_id, region_id, tri_id = self._get_random_index_label(label)
 
             # select a point within the triangle as the center position of rectangle
@@ -365,6 +380,9 @@ class OpenSlideGenerator(object):
                     break
             if not discard:
                 break
+            first_loop = False
+
+        self.fetch_count[slide_id][region_id] += 1
 
         # cropping with rotation
         crop_size = int(self.src_sizes[slide_id] * 2**0.5 * max(abs(math.cos(angle)),
@@ -391,7 +409,7 @@ class OpenSlideGenerator(object):
             im = Image.fromarray(np.uint8(result.transpose((1,2,0))*255))
             im.save('./%s/%d_%d-%d-%d.png' % (self.dump_patch, self.label_of_region[slide_id][region_id], slide_id, region_id, i))
 
-        return result, self.label_of_region[slide_id][region_id]
+        return result, self.label_of_region[slide_id][region_id], (slide_id, region_id, posx, posy)
 
     def labels(self):
         return self.regions_of_label.keys()
@@ -404,7 +422,7 @@ class OpenSlideGenerator(object):
             images = []
             labels = []
             for i in range(batch_size):
-                image, label = self.get_example(i)
+                image, label, _ = self.get_example(i)
                 images.append(image.transpose((1, 2, 0)))
                 labels.append(keras.utils.to_categorical(list(self.labels()).index(label), len(self.labels())))
             images = np.asarray(images, dtype=np.float32)

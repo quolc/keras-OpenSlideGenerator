@@ -19,7 +19,7 @@ gen_val = openslide_generator.OpenSlideGenerator(
 
 batch_size = 50
 num_classes = len(gen_train.labels())
-epochs = 10
+epochs = 1
 data_augmentation = True
 num_predictions = 20
 save_dir = os.path.join(os.getcwd(), 'saved_models')
