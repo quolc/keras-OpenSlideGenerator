@@ -13,7 +13,9 @@ import keras
 class OpenSlideGenerator(object):
     fetch_modes = ['area', 'slide', 'label']
 
-    def __init__(self, path, root, src_size, patch_size, fetch_mode='area', rotation=True, flip=False, dump_patch=None):
+    def __init__(self, path, root, src_size, patch_size, fetch_mode='area',
+                 rotation=True, flip=False, blur=0,
+                 dump_patch=None):
         self.path = path
         self.root = root
         self.src_size = src_size
@@ -23,6 +25,7 @@ class OpenSlideGenerator(object):
             raise Exception('invalid fetch_mode %r' % self.fetch_mode)
         self.rotation = rotation
         self.flip = flip
+        self.blur = blur
         self.dump_patch = dump_patch
 
         self.slide_names = []
@@ -402,6 +405,11 @@ class OpenSlideGenerator(object):
         if self.flip and random.randint(0, 1):
             result = result[:, :, ::-1]
         result *= (1.0 / 255.0)
+
+        # blurring effect
+        if self.blur > 0:
+            blur_size = random.randint(1, self.blur)
+            result = cv2.blur(result.transpose(1,2,0), (blur_size, blur_size)).transpose((2,0,1))
 
         # debug
         if self.dump_patch is not None:
