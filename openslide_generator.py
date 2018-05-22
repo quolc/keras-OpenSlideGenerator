@@ -7,6 +7,8 @@ import cv2
 import tripy
 from openslide import OpenSlide
 
+from skimage.color import rgb2hed, hed2rgb
+
 import keras
 
 
@@ -14,7 +16,7 @@ class OpenSlideGenerator(object):
     fetch_modes = ['area', 'slide', 'label']
 
     def __init__(self, path, root, src_size, patch_size, fetch_mode='area',
-                 rotation=True, flip=False, blur=0,
+                 rotation=True, flip=False, blur=0, he_augmentation=False,
                  dump_patch=None):
         self.path = path
         self.root = root
@@ -26,6 +28,7 @@ class OpenSlideGenerator(object):
         self.rotation = rotation
         self.flip = flip
         self.blur = blur
+        self.he_augmentation = he_augmentation
         self.dump_patch = dump_patch
 
         self.slide_names = []
@@ -410,6 +413,17 @@ class OpenSlideGenerator(object):
         if self.blur > 0:
             blur_size = random.randint(1, self.blur)
             result = cv2.blur(result.transpose(1,2,0), (blur_size, blur_size)).transpose((2,0,1))
+
+        if self.he_augmentation:
+            hed = rgb2hed(result.transpose(1,2,0))
+            ah = 0.95 + random.random() * 0.1
+            bh = -0.05 + random.random() * 0.1
+            ae = 0.95 + random.random() * 0.1
+            be = -0.05 + random.random() * 0.1
+            hed[:,:,0] = ah * hed[:,:,0] + bh
+            hed[:,:,1] = ae * hed[:,:,1] + be
+            result = hed2rgb(hed).transpose(2,0,1)
+            result = np.clip(result, 0, 1.0)
 
         # debug
         if self.dump_patch is not None:
