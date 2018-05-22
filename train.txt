@@ -1,4 +1,4 @@
-@desert1.tif
+@desert1.tif 300
 0 18 # sky
 1 21
 5835 11

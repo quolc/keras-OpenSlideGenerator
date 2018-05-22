@@ -31,10 +31,16 @@ class OpenSlideGenerator(object):
         self.triangulation = []
         self.regions_of_label = dict()
 
+        self.src_sizes = []
+
         self.total_area = 0
         self.slide_areas = []     # total area of a slide
         self.label_areas = dict() # total area of a label
+        self.total_weight = 0
+        self.slide_weights = []   # total weight of a slide
+        self.label_weights = dict()
 
+        self.total_weight = 0
         self.weights = []          # overall weight
         self.weights_in_slide = [] # weight in a slide
         self.weights_in_label = [] # weight in the same label
@@ -79,17 +85,30 @@ class OpenSlideGenerator(object):
                 if state == 0:
                     if not is_svs_line:
                         raise Exception('invalid dataset file format!')
-                    self.slide_names.append(line)
+
+                    svs_name = line.split()[0]
+                    if len(line.split()) > 1 and line.split()[1].isdigit:
+                        svs_src_size = int(line.split()[1])
+                    else:
+                        svs_src_size = self.src_size
+
+                    self.slide_names.append(svs_name)
+                    self.src_sizes.append(svs_src_size)
                     self.label_of_region.append([])
                     self.structure.append([])
                     state = 1
                 elif state == 1:
                     if is_svs_line: # new file
-                        self.slide_names.append(line)
+                        svs_name = line.split()[0]
+                        if len(line.split()) > 1 and line.split()[1].isdigit:
+                            svs_src_size = int(line.split()[1])
+                        else:
+                            svs_src_size = self.src_size # default src_size
+
+                        self.slide_names.append(svs_name)
+                        self.src_sizes.append(svs_src_size)
                         self.label_of_region.append([])
                         self.structure.append([])
-                        self.a_slide.append([])
-                        self.p_slide.append([])
                         state = 1
                     else: # region header
                         self.label_of_region[-1].append(x)
@@ -99,6 +118,7 @@ class OpenSlideGenerator(object):
                             self.a_label[x] = []
                             self.p_label[x] = []
                             self.label_areas[x] = 0
+                            self.label_weights[x] = 0
                             self.label_triangles[x] = 0
                             self.serialized_index_label[x] = []
                         self.structure[-1].append([])
@@ -135,6 +155,7 @@ class OpenSlideGenerator(object):
             self.a_slide.append([])
             self.p_slide.append([])
             self.slide_areas.append(0)
+            self.slide_weights.append(0)
             self.slide_triangles.append(0)
             w, h = self.slides[i].dimensions # slide width/height
 
@@ -162,21 +183,25 @@ class OpenSlideGenerator(object):
                     c = x3 - x1
                     d = y3 - y1
                     area = abs(a*d - b*c)/2
-                    self.weights[-1][-1].append(area)
-                    self.weights_in_slide[-1][-1].append(area)
-                    self.weights_in_label[-1][-1].append(area)
+                    weight = area / (self.src_sizes[i]**2)
+                    self.weights[-1][-1].append(weight)
+                    self.weights_in_slide[-1][-1].append(weight)
+                    self.weights_in_label[-1][-1].append(weight)
                     self.total_area += area
+                    self.total_weight += weight
                     self.slide_areas[-1] += area
+                    self.slide_weights[-1] += weight
                     self.label_areas[label] += area
+                    self.label_weights[label] += weight
 
         # calculate the set of triangle weights for each fetch_mode
         for i in range(len(self.weights)): # svs
             for j in range(len(self.weights[i])): # region
                 for k in range(len(self.weights[i][j])): # triangle
-                    self.weights[i][j][k] /= self.total_area
-                    self.weights_in_slide[i][j][k] /= self.slide_areas[i]
+                    self.weights[i][j][k] /= self.total_weight
+                    self.weights_in_slide[i][j][k] /= self.slide_weights[i]
                     label = self.label_of_region[i][j]
-                    self.weights_in_label[i][j][k] /= self.label_areas[label]
+                    self.weights_in_label[i][j][k] /= self.label_weights[label]
                     self.serialized_index.append((i, j, k))
                     self.serialized_index_slide[i].append((j, k))
                     self.serialized_index_label[label].append((i, j, k))
@@ -233,10 +258,24 @@ class OpenSlideGenerator(object):
             self.a_label[label], self.p_label[label] = walker_precomputation(probs)
 
         print('loaded {} slide(s).'.format(len(self.structure)))
-        print('there are total {} regions with total area of {} px^2.'.format(total_region_count, int(self.total_area)))
-        self.patch_per_epoch = int(self.total_area / (self.src_size ** 2) + 1)
-        print('{} / {}^2 = {} ... patches/epoch is set to {}.'.format(
-            self.total_area, self.src_size, self.total_area / (self.src_size ** 2), self.patch_per_epoch))
+        for i in range(len(self.structure)):
+            print('[{}] {}'.format(i, self.slide_names[i]))
+            print('- {} regions'.format(len(self.structure[i])))
+            print('- {} px2'.format(self.slide_areas[i]))
+            print('- patch scale:', self.src_sizes[i])
+            weight_sum = 0
+            for region in self.weights[i]:
+                for w_triangle in region:
+                    weight_sum += w_triangle
+            print('- fetch probability (area mode):', weight_sum)
+        print('there are total {} regions.'.format(total_region_count, int(self.total_area)))
+
+        self.patch_per_epoch = 0
+        for i in range(len(self.src_sizes)):
+            self.patch_per_epoch += self.slide_areas[i] / (self.src_sizes[i] ** 2)
+            self.patch_per_epoch = int(self.patch_per_epoch)
+        print('patches per epoch is set to {}.'.format(self.patch_per_epoch))
+        print()
 
     def __len__(self):
         return self.patch_per_epoch
@@ -295,7 +334,7 @@ class OpenSlideGenerator(object):
                 slide_id = random.randint(0, len(self.structure) - 1)
                 region_id, tri_id = self._get_random_index_slide(slide_id)
             elif self.fetch_mode == 'label':
-                label = random.choice(list(self.label_areas.keys()))
+                label = random.choice(list(self.label_weights.keys()))
                 slide_id, region_id, tri_id = self._get_random_index_label(label)
 
             # select a point within the triangle as the center position of rectangle
@@ -318,8 +357,8 @@ class OpenSlideGenerator(object):
             discard = False
             corners = []
             for theta in angles:
-                cx = posx + self.src_size / math.sqrt(2) * math.cos(theta)
-                cy = posy + self.src_size / math.sqrt(2) * math.sin(theta)
+                cx = posx + self.src_sizes[slide_id] / math.sqrt(2) * math.cos(theta)
+                cy = posy + self.src_sizes[slide_id] / math.sqrt(2) * math.sin(theta)
                 corners.append((cx, cy))
                 if not self.point_in_region(slide_id, region_id, cx, cy):
                     discard = True
@@ -328,7 +367,7 @@ class OpenSlideGenerator(object):
                 break
 
         # cropping with rotation
-        crop_size = int(self.src_size * 2**0.5 * max(abs(math.cos(angle)),
+        crop_size = int(self.src_sizes[slide_id] * 2**0.5 * max(abs(math.cos(angle)),
                                                      abs(math.sin(angle))))
         cropped = np.asarray(self.slides[slide_id].read_region(
                                                     (int(posx - crop_size/2),
@@ -338,8 +377,8 @@ class OpenSlideGenerator(object):
                                           45 + 360 * angle/(2*math.pi), 1)
         rotated = cv2.warpAffine(cropped, mat, (crop_size, crop_size))
 
-        result = rotated[int(crop_size/2-self.src_size/2):int(crop_size/2+self.src_size/2),\
-                         int(crop_size/2-self.src_size/2):int(crop_size/2+self.src_size/2)]
+        result = rotated[int(crop_size/2-self.src_sizes[slide_id]/2):int(crop_size/2+self.src_sizes[slide_id]/2),\
+                         int(crop_size/2-self.src_sizes[slide_id]/2):int(crop_size/2+self.src_sizes[slide_id]/2)]
         result = cv2.resize(result, (self.patch_size, self.patch_size)).transpose((2,0,1))
 
         if self.flip and random.randint(0, 1):
