@@ -423,7 +423,7 @@ class OpenSlideGenerator(object):
             hed[:,:,0] = ah * hed[:,:,0] + bh
             hed[:,:,1] = ae * hed[:,:,1] + be
             result = hed2rgb(hed).transpose(2,0,1)
-            result = np.clip(result, 0, 1.0)
+            result = np.clip(result, 0, 1.0).astype(np.float32)
 
         # debug
         if self.dump_patch is not None:
