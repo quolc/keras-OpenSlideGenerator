@@ -16,7 +16,7 @@ class OpenSlideGenerator(object):
     fetch_modes = ['area', 'slide', 'label']
 
     def __init__(self, path, root, src_size, patch_size, fetch_mode='area',
-                 rotation=True, flip=False, blur=0, he_augmentation=False,
+                 rotation=True, flip=False, blur=0, he_augmentation=False, scale_augmentation=False,
                  dump_patch=None, verbose=1):
         self.path = path
         self.root = root
@@ -29,6 +29,7 @@ class OpenSlideGenerator(object):
         self.flip = flip
         self.blur = blur
         self.he_augmentation = he_augmentation
+        self.scale_augmentation = scale_augmentation
         self.dump_patch = dump_patch
         self.verbose = verbose
 
@@ -373,6 +374,11 @@ class OpenSlideGenerator(object):
                    a1 * self.triangulation[slide_id][region_id][tri_id][1][1] + \
                    a2 * self.triangulation[slide_id][region_id][tri_id][2][1]
 
+            src_size = self.src_sizes[slide_id]
+            if self.scale_augmentation:
+                src_size *= 0.8 + random.random() * 0.4
+                print(src_size)
+
             if self.rotation:
                 angle = random.random() * math.pi * 2
             else:
@@ -381,8 +387,8 @@ class OpenSlideGenerator(object):
             discard = False
             corners = []
             for theta in angles:
-                cx = posx + self.src_sizes[slide_id] / math.sqrt(2) * math.cos(theta)
-                cy = posy + self.src_sizes[slide_id] / math.sqrt(2) * math.sin(theta)
+                cx = posx + src_size / math.sqrt(2) * math.cos(theta)
+                cy = posy + src_size / math.sqrt(2) * math.sin(theta)
                 corners.append((cx, cy))
                 if not self.point_in_region(slide_id, region_id, cx, cy):
                     discard = True
@@ -394,7 +400,7 @@ class OpenSlideGenerator(object):
         self.fetch_count[slide_id][region_id] += 1
 
         # cropping with rotation
-        crop_size = int(self.src_sizes[slide_id] * 2**0.5 * max(abs(math.cos(angle)),
+        crop_size = int(src_size * 2**0.5 * max(abs(math.cos(angle)),
                                                      abs(math.sin(angle))))
         cropped = np.asarray(self.slides[slide_id].read_region(
                                                     (int(posx - crop_size/2),
@@ -404,8 +410,8 @@ class OpenSlideGenerator(object):
                                           45 + 360 * angle/(2*math.pi), 1)
         rotated = cv2.warpAffine(cropped, mat, (crop_size, crop_size))
 
-        result = rotated[int(crop_size/2-self.src_sizes[slide_id]/2):int(crop_size/2+self.src_sizes[slide_id]/2),\
-                         int(crop_size/2-self.src_sizes[slide_id]/2):int(crop_size/2+self.src_sizes[slide_id]/2)]
+        result = rotated[int(crop_size/2-src_size/2):int(crop_size/2+src_size/2),\
+                         int(crop_size/2-src_size/2):int(crop_size/2+src_size/2)]
         result = cv2.resize(result, (self.patch_size, self.patch_size)).transpose((2,0,1))
 
         if self.flip and random.randint(0, 1):
