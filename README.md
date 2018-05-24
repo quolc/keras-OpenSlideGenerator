@@ -15,6 +15,7 @@ It also provides several data augmentation features (see below).
 - multiple sampling options (based on area / label / slide)
 - box-blurring with random kernel size
 - H&E-stain augmentation (Tellez et al., 2018)
+- scale augmentation (+-20%)
 
 ## Dependency
 
