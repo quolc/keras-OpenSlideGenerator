@@ -377,7 +377,6 @@ class OpenSlideGenerator(object):
             src_size = self.src_sizes[slide_id]
             if self.scale_augmentation:
                 src_size *= 0.8 + random.random() * 0.4
-                print(src_size)
 
             if self.rotation:
                 angle = random.random() * math.pi * 2
