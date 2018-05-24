@@ -17,7 +17,7 @@ class OpenSlideGenerator(object):
 
     def __init__(self, path, root, src_size, patch_size, fetch_mode='area',
                  rotation=True, flip=False, blur=0, he_augmentation=False,
-                 dump_patch=None):
+                 dump_patch=None, verbose=1):
         self.path = path
         self.root = root
         self.src_size = src_size
@@ -30,6 +30,7 @@ class OpenSlideGenerator(object):
         self.blur = blur
         self.he_augmentation = he_augmentation
         self.dump_patch = dump_patch
+        self.verbose = verbose
 
         self.slide_names = []
         self.label_of_region = []
@@ -266,25 +267,27 @@ class OpenSlideGenerator(object):
 
             self.a_label[label], self.p_label[label] = walker_precomputation(probs)
 
-        print('loaded {} slide(s).'.format(len(self.structure)))
-        for i in range(len(self.structure)):
-            print('[{}] {}'.format(i, self.slide_names[i]))
-            print('- {} regions'.format(len(self.structure[i])))
-            print('- {} px2'.format(self.slide_areas[i]))
-            print('- patch scale:', self.src_sizes[i])
-            weight_sum = 0
-            for region in self.weights[i]:
-                for w_triangle in region:
-                    weight_sum += w_triangle
-            print('- fetch probability (area mode):', weight_sum)
-        print('there are total {} regions.'.format(total_region_count, int(self.total_area)))
+        if self.verbose > 0:
+            print('loaded {} slide(s).'.format(len(self.structure)))
+            for i in range(len(self.structure)):
+                print('[{}] {}'.format(i, self.slide_names[i]))
+                print('- {} regions'.format(len(self.structure[i])))
+                print('- {} px2'.format(self.slide_areas[i]))
+                print('- patch scale:', self.src_sizes[i])
+                weight_sum = 0
+                for region in self.weights[i]:
+                    for w_triangle in region:
+                        weight_sum += w_triangle
+                print('- fetch probability (area mode):', weight_sum)
+            print('there are total {} regions.'.format(total_region_count, int(self.total_area)))
 
         self.patch_per_epoch = 0
         for i in range(len(self.src_sizes)):
             self.patch_per_epoch += self.slide_areas[i] / (self.src_sizes[i] ** 2)
             self.patch_per_epoch = int(self.patch_per_epoch)
-        print('patches per epoch is set to {}.'.format(self.patch_per_epoch))
-        print()
+        if self.verbose > 0:
+            print('patches per epoch is set to {}.'.format(self.patch_per_epoch))
+            print()
 
         self.reset_fetch_count()
 
@@ -415,7 +418,7 @@ class OpenSlideGenerator(object):
             result = cv2.blur(result.transpose(1,2,0), (blur_size, blur_size)).transpose((2,0,1))
 
         if self.he_augmentation:
-            hed = rgb2hed(result.transpose(1,2,0))
+            hed = rgb2hed(np.clip(result.transpose(1,2,0), -1.0, 1.0))
             ah = 0.95 + random.random() * 0.1
             bh = -0.05 + random.random() * 0.1
             ae = 0.95 + random.random() * 0.1
