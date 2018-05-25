@@ -348,17 +348,17 @@ class OpenSlideGenerator(object):
         return winding_number != 0
 
     def get_example(self, i):
-        first_loop = True
+        loop_count = 0
         while True:
             # select a triangle by the current fetch-mode
             if self.fetch_mode == 'area':
                 slide_id, region_id, tri_id = self._get_random_index_all()
             elif self.fetch_mode == 'slide':
-                if first_loop: # prevent bias
+                if loop_count % 100 == 0: # prevent bias
                     slide_id = random.randint(0, len(self.structure) - 1)
                 region_id, tri_id = self._get_random_index_slide(slide_id)
             elif self.fetch_mode == 'label':
-                if first_loop: # prevent bias
+                if loop_count % 100 == 0: # prevent bias
                     label = random.choice(list(self.label_weights.keys()))
                 slide_id, region_id, tri_id = self._get_random_index_label(label)
 
@@ -394,7 +394,7 @@ class OpenSlideGenerator(object):
                     break
             if not discard:
                 break
-            first_loop = False
+            loop_count += 1
 
         self.fetch_count[slide_id][region_id] += 1
 
