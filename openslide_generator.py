@@ -1,10 +1,12 @@
 import random
 import math
 import os
+import copy
 
 import numpy as np
 import cv2
 import tripy
+import pyclipper
 from openslide import OpenSlide
 
 from skimage.color import rgb2hed, hed2rgb
@@ -36,17 +38,19 @@ class OpenSlideGenerator(object):
         self.slide_names = []
         self.label_of_region = []
         self.structure = []
+        self.shifted_structure = []
         self.triangulation = []
         self.regions_of_label = dict()
 
         self.src_sizes = []
 
-        self.total_area = 0
-        self.slide_areas = []     # total area of a slide
-        self.label_areas = dict() # total area of a label
         self.total_weight = 0
         self.slide_weights = []   # total weight of a slide
         self.label_weights = dict()
+
+        self.total_area = 0
+        self.slide_areas = []     # total area of a slide
+        self.label_areas = dict() # total area of a label
 
         self.total_weight = 0
         self.weights = []          # overall weight
@@ -155,9 +159,23 @@ class OpenSlideGenerator(object):
             except Exception as exc:
                 raise Exception('an error has occurred while reading slide "{}"'.format(name))
 
+        # prepare shifted structure
+        self.shifted_structure = copy.deepcopy(self.structure)
+        for i in range(len(self.shifted_structure)):
+            for j in range(len(self.shifted_structure[i])):
+                pco = pyclipper.PyclipperOffset()
+                pco.AddPath(self.shifted_structure[i][j], pyclipper.JT_ROUND, pyclipper.ET_CLOSEDPOLYGON)
+                # offsetting
+                shifted_region = pco.Execute(-self.src_sizes[i] / 2)
+                # shifted_region = pco.Execute(0)
+                if len(shifted_region) == 0:
+                    self.shifted_structure[i][j] = [] # collapsed to a point
+                else:
+                    self.shifted_structure[i][j] = shifted_region[0]
+
         # region triangulation
         total_region_count = 0
-        for i in range(len(self.structure)):
+        for i in range(len(self.shifted_structure)):
             self.triangulation.append([])
             self.weights.append([])
             self.weights_in_slide.append([])
@@ -165,13 +183,12 @@ class OpenSlideGenerator(object):
             self.serialized_index_slide.append([])
             self.a_slide.append([])
             self.p_slide.append([])
-            self.slide_areas.append(0)
             self.slide_weights.append(0)
             self.slide_triangles.append(0)
             w, h = self.slides[i].dimensions # slide width/height
 
-            for j in range(len(self.structure[i])):
-                region = self.structure[i][j]
+            for j in range(len(self.shifted_structure[i])):
+                region = self.shifted_structure[i][j]
                 total_region_count += 1
 
                 # triangulation
@@ -198,12 +215,27 @@ class OpenSlideGenerator(object):
                     self.weights[-1][-1].append(weight)
                     self.weights_in_slide[-1][-1].append(weight)
                     self.weights_in_label[-1][-1].append(weight)
-                    self.total_area += area
                     self.total_weight += weight
-                    self.slide_areas[-1] += area
                     self.slide_weights[-1] += weight
-                    self.label_areas[label] += area
                     self.label_weights[label] += weight
+
+        # calculate raw slide size
+        for i in range(len(self.structure)):
+            self.slide_areas.append(0)
+
+            for j in range(len(self.structure[i])):
+                region = self.structure[i][j]
+                triangles = tripy.earclip(region)
+                label = self.label_of_region[i][j]
+                for (x1, y1), (x2, y2), (x3, y3) in triangles:
+                    a = x2 - x1
+                    b = y2 - y1
+                    c = x3 - x1
+                    d = y3 - y1
+                    area = abs(a*d - b*c)/2
+                    self.total_area += area
+                    self.slide_areas[-1] += area
+                    self.label_areas[label] += area
 
         # calculate the set of triangle weights for each fetch_mode
         for i in range(len(self.weights)): # svs
@@ -269,10 +301,10 @@ class OpenSlideGenerator(object):
             self.a_label[label], self.p_label[label] = walker_precomputation(probs)
 
         if self.verbose > 0:
-            print('loaded {} slide(s).'.format(len(self.structure)))
-            for i in range(len(self.structure)):
+            print('loaded {} slide(s).'.format(len(self.shifted_structure)))
+            for i in range(len(self.shifted_structure)):
                 print('[{}] {}'.format(i, self.slide_names[i]))
-                print('- {} regions'.format(len(self.structure[i])))
+                print('- {} regions'.format(len(self.shifted_structure[i])))
                 print('- {} px2'.format(self.slide_areas[i]))
                 print('- patch scale:', self.src_sizes[i])
                 weight_sum = 0
@@ -298,6 +330,8 @@ class OpenSlideGenerator(object):
             self.fetch_count.append([])
             for _ in slide:
                 self.fetch_count[-1].append(0)
+        self.total_fetch_count = 0
+        self.total_loop_count = 0
 
     def __len__(self):
         return self.patch_per_epoch
@@ -334,7 +368,7 @@ class OpenSlideGenerator(object):
         def is_left(p0, p1, p2):
             return ((p1[0]-p0[0])*(p2[1]-p0[1]) - (p2[0]-p0[0])*(p1[1]-p0[1]))
 
-        poly = self.structure[slide_id][region_id]
+        poly = self.structure[slide_id][region_id] # point-in-region problem for corner: should be judged for raw structure
         winding_number = 0
         for i in range(len(poly)):
             if poly[i][1] <= cy:
@@ -397,6 +431,8 @@ class OpenSlideGenerator(object):
             loop_count += 1
 
         self.fetch_count[slide_id][region_id] += 1
+        self.total_fetch_count += 1
+        self.total_loop_count += loop_count
 
         # cropping with rotation
         crop_size = int(src_size * 2**0.5 * max(abs(math.cos(angle)),
