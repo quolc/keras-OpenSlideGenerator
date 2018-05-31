@@ -17,8 +17,10 @@ gen_train = openslide_generator.OpenSlideGenerator(
 gen_val = openslide_generator.OpenSlideGenerator(
         './val.txt', './test_slides', 512, 256)
 
+gen_train.fetch_mode = 'label-slide'
+
 batch_size = 50
-num_classes = len(gen_train.labels())
+num_classes = len(gen_train.labels)
 epochs = 1
 data_augmentation = True
 num_predictions = 20

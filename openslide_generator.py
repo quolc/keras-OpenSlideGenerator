@@ -15,7 +15,7 @@ import keras
 
 
 class OpenSlideGenerator(object):
-    fetch_modes = ['area', 'slide', 'label']
+    fetch_modes = ['area', 'slide', 'label', 'label-slide']
 
     def __init__(self, path, root, src_size, patch_size, fetch_mode='area',
                  rotation=True, flip=False, blur=0, he_augmentation=False, scale_augmentation=False,
@@ -36,34 +36,39 @@ class OpenSlideGenerator(object):
         self.verbose = verbose
 
         self.slide_names = []
+        self.labels = []
         self.label_of_region = []
         self.structure = []
         self.shifted_structure = []
         self.triangulation = []
         self.regions_of_label = dict()
+        self.regions_of_label_slide = dict()
 
         self.src_sizes = []
 
         self.total_weight = 0
-        self.slide_weights = []   # total weight of a slide
-        self.label_weights = dict()
+        self.slide_weights = []     # total weight of a slide
+        self.label_weights = dict() # total weight of a label
+        self.label_slide_weights = dict() # total weight of regions of certain label in a slide.
+
+        self.weights = []          # overall weight
+        self.weights_in_slide = [] # weight in a slide
+        self.weights_in_label = [] # weight in the same label
+        self.weights_in_label_slide = [] # weight in the same label and slide
 
         self.total_area = 0
         self.slide_areas = []     # total area of a slide
         self.label_areas = dict() # total area of a label
 
-        self.total_weight = 0
-        self.weights = []          # overall weight
-        self.weights_in_slide = [] # weight in a slide
-        self.weights_in_label = [] # weight in the same label
-
         self.total_triangles = 0
         self.slide_triangles = []     # total triangle number for each slide
         self.label_triangles = dict() # total triangle number for each label
+        self.label_slide_triangles = dict() # total triangule number for each label-slide pair
 
         self.serialized_index = []           # serialized_index[ID] -> (SLIDE_ID, REGION_ID, TRIANGLE_ID)
         self.serialized_index_slide = []     # serialized_index_slide[SLIDE_ID][ID] -> (REGION_ID, TRIANGLE_ID)
         self.serialized_index_label = dict() # serialized_index_label[label][ID] -> (SLIDE_ID, REGION_ID, TRIANGLE_ID)
+        self.serialized_index_label_slide = dict() # *[label][SLIDE_ID][ID] -> (REGION_ID, TRIANGLE_ID)
 
         # variables for Walker's alias method
         self.a_area = []
@@ -72,6 +77,8 @@ class OpenSlideGenerator(object):
         self.p_slide = []
         self.a_label = dict()
         self.p_label = dict()
+        self.a_label_slide = dict()
+        self.p_label_slide = dict()
 
         # OpenSlide objects
         self.slides = []
@@ -128,14 +135,20 @@ class OpenSlideGenerator(object):
                     else: # region header
                         self.label_of_region[-1].append(x)
                         # handling newly found label
-                        if x not in self.regions_of_label.keys():
+                        if x not in self.labels:
+                            self.labels.append(x)
                             self.regions_of_label[x] = []
                             self.a_label[x] = []
                             self.p_label[x] = []
+                            self.a_label_slide[x] = []
+                            self.p_label_slide[x] = []
                             self.label_areas[x] = 0
                             self.label_weights[x] = 0
+                            self.label_slide_weights[x] = []
                             self.label_triangles[x] = 0
+                            self.label_slide_triangles[x] = []
                             self.serialized_index_label[x] = []
+                            self.serialized_index_label_slide[x] = []
                         self.structure[-1].append([])
                         self.regions_of_label[x].append((len(self.structure) - 1, len(self.structure[-1]) - 1))
                         left_points = y
@@ -152,6 +165,15 @@ class OpenSlideGenerator(object):
         if state != 1: # dataset file should end with a completed region entry
             raise Exception('invalid dataset file format!')
 
+        # calculate regions_of_label_slide
+        for label in self.labels:
+            self.regions_of_label_slide[label] = []
+            for i in range(len(self.structure)):
+                self.regions_of_label_slide[label].append([])
+                for j in range(len(self.structure[i])):
+                    if self.label_of_region[i][j] == label:
+                        self.regions_of_label_slide[label][i].append(j)
+
         # load slides
         for name in self.slide_names:
             try:
@@ -159,7 +181,7 @@ class OpenSlideGenerator(object):
             except Exception as exc:
                 raise Exception('an error has occurred while reading slide "{}"'.format(name))
 
-        # prepare shifted structure
+        # prepare shifted (offset) structure
         self.shifted_structure = copy.deepcopy(self.structure)
         for i in range(len(self.shifted_structure)):
             for j in range(len(self.shifted_structure[i])):
@@ -180,12 +202,20 @@ class OpenSlideGenerator(object):
             self.weights.append([])
             self.weights_in_slide.append([])
             self.weights_in_label.append([])
+            self.weights_in_label_slide.append([])
             self.serialized_index_slide.append([])
             self.a_slide.append([])
             self.p_slide.append([])
             self.slide_weights.append(0)
             self.slide_triangles.append(0)
             w, h = self.slides[i].dimensions # slide width/height
+
+            for label in self.labels:
+                self.a_label_slide[label].append([])
+                self.p_label_slide[label].append([])
+                self.serialized_index_label_slide[label].append([])
+                self.label_slide_weights[label].append(0)
+                self.label_slide_triangles[label].append(0)
 
             for j in range(len(self.shifted_structure[i])):
                 region = self.shifted_structure[i][j]
@@ -199,25 +229,29 @@ class OpenSlideGenerator(object):
                         raise Exception('invalid polygon vertex position (%d, %d) in %s!' % (x, y, self.slide_names[i]))
 
                 # triangle area calculation
-                self.weights[-1].append([])
-                self.weights_in_slide[-1].append([])
-                self.weights_in_label[-1].append([])
-                self.slide_triangles[-1] += len(self.triangulation[-1][-1])
+                self.weights[i].append([])
+                self.weights_in_slide[i].append([])
+                self.weights_in_label[i].append([])
+                self.weights_in_label_slide[i].append([])
+                self.slide_triangles[i] += len(self.triangulation[i][j])
                 label = self.label_of_region[i][j]
-                self.label_triangles[label] += len(self.triangulation[-1][-1])
-                for (x1, y1), (x2, y2), (x3, y3) in self.triangulation[-1][-1]:
+                self.label_triangles[label] += len(self.triangulation[i][j])
+                self.label_slide_triangles[label][i] += len(self.triangulation[i][j])
+                for (x1, y1), (x2, y2), (x3, y3) in self.triangulation[i][j]:
                     a = x2 - x1
                     b = y2 - y1
                     c = x3 - x1
                     d = y3 - y1
                     area = abs(a*d - b*c)/2
                     weight = area / (self.src_sizes[i]**2)
-                    self.weights[-1][-1].append(weight)
-                    self.weights_in_slide[-1][-1].append(weight)
-                    self.weights_in_label[-1][-1].append(weight)
+                    self.weights[i][j].append(weight)
+                    self.weights_in_slide[i][j].append(weight)
+                    self.weights_in_label[i][j].append(weight)
+                    self.weights_in_label_slide[i][j].append(weight)
                     self.total_weight += weight
-                    self.slide_weights[-1] += weight
+                    self.slide_weights[i] += weight
                     self.label_weights[label] += weight
+                    self.label_slide_weights[label][i] += weight
 
         # calculate raw slide size
         for i in range(len(self.structure)):
@@ -245,9 +279,12 @@ class OpenSlideGenerator(object):
                     self.weights_in_slide[i][j][k] /= self.slide_weights[i]
                     label = self.label_of_region[i][j]
                     self.weights_in_label[i][j][k] /= self.label_weights[label]
+                    if self.label_slide_weights[label][i] > 0:
+                        self.weights_in_label_slide[i][j][k] /= self.label_slide_weights[label][i]
                     self.serialized_index.append((i, j, k))
                     self.serialized_index_slide[i].append((j, k))
                     self.serialized_index_label[label].append((i, j, k))
+                    self.serialized_index_label_slide[label][i].append((j, k))
                     self.total_triangles += 1
 
         # Walker's alias method for weighted sampling of triangles
@@ -292,13 +329,22 @@ class OpenSlideGenerator(object):
             self.a_slide[i], self.p_slide[i] = walker_precomputation(probs)
 
         # pre-computation for 'label' mode
-        for label in self.regions_of_label.keys():
+        for label in self.labels:
             probs = []
             for slide_id, region_id in self.regions_of_label[label]:
                 for tri_id in range(len(self.weights_in_label[slide_id][region_id])):
                     probs.append(self.weights_in_label[slide_id][region_id][tri_id])
 
             self.a_label[label], self.p_label[label] = walker_precomputation(probs)
+
+        # pre-computation for 'label-slide' mode
+        for label in self.labels:
+            for slide_id in range(len(self.weights)):
+                probs = []
+                for region_id in self.regions_of_label_slide[label][slide_id]:
+                    for tri_id in range(len(self.weights_in_label_slide[slide_id][region_id])):
+                        probs.append(self.weights_in_label_slide[slide_id][region_id][tri_id])
+                self.a_label_slide[label][slide_id], self.p_label_slide[label][slide_id] = walker_precomputation(probs)
 
         if self.verbose > 0:
             print('loaded {} slide(s).'.format(len(self.shifted_structure)))
@@ -363,6 +409,15 @@ class OpenSlideGenerator(object):
         else:
             return self.serialized_index_label[label][self.a_label[label][i]]
 
+    # get random triangle index which has specific a label in a slide.
+    def _get_random_index_label_slide(self, label, slide):
+        q = random.random() * self.label_slide_triangles[label][slide]
+        i = int(q)
+        if q - i < self.p_label_slide[label][slide][i]:
+            return self.serialized_index_label_slide[label][slide][i]
+        else:
+            return self.serialized_index_label_slide[label][slide][self.a_label_slide[label][slide][i]]
+
     # winding-number algorithm
     def point_in_region(self, slide_id, region_id, cx, cy):
         def is_left(p0, p1, p2):
@@ -393,8 +448,17 @@ class OpenSlideGenerator(object):
                 region_id, tri_id = self._get_random_index_slide(slide_id)
             elif self.fetch_mode == 'label':
                 if loop_count % 100 == 0: # prevent bias
-                    label = random.choice(list(self.label_weights.keys()))
+                    label = random.choice(self.labels)
                 slide_id, region_id, tri_id = self._get_random_index_label(label)
+            elif self.fetch_mode == 'label-slide':
+                if loop_count % 100 == 0: # prevent bias
+                    while True:
+                        label = random.choice(list(self.label_weights.keys()))
+                        slide_id = random.randint(0, len(self.structure) - 1)
+                        if len(self.regions_of_label_slide[label][slide_id]) > 0:
+                            break
+                region_id, tri_id = self._get_random_index_label_slide(label, slide_id)
+            loop_count += 1
 
             # select a point within the triangle as the center position of rectangle
             a1 = random.random()
@@ -428,7 +492,6 @@ class OpenSlideGenerator(object):
                     break
             if not discard:
                 break
-            loop_count += 1
 
         self.fetch_count[slide_id][region_id] += 1
         self.total_fetch_count += 1
@@ -477,9 +540,6 @@ class OpenSlideGenerator(object):
 
         return result, self.label_of_region[slide_id][region_id], (slide_id, region_id, posx, posy)
 
-    def labels(self):
-        return self.regions_of_label.keys()
-
     def shape(self):
         return (self.patch_size, self.patch_size, 3)
 
@@ -490,7 +550,7 @@ class OpenSlideGenerator(object):
             for i in range(batch_size):
                 image, label, _ = self.get_example(i)
                 images.append(image.transpose((1, 2, 0)))
-                labels.append(keras.utils.to_categorical(list(self.labels()).index(label), len(self.labels())))
+                labels.append(keras.utils.to_categorical(self.labels.index(label), len(self.labels)))
             images = np.asarray(images, dtype=np.float32)
             labels = np.asarray(labels, dtype=np.float32)
             yield images, labels
