@@ -65,7 +65,7 @@ model.fit_generator(gen_train.flow(batch_size=batch_size),
                     epochs=epochs,
                     validation_data=gen_val.flow(batch_size=batch_size),
                     validation_steps=math.ceil(gen_val.patch_per_epoch/batch_size),
-                    workers=4)
+                    workers=1)
 
 # Save model and weights
 if not os.path.isdir(save_dir):

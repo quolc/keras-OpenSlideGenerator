@@ -170,9 +170,6 @@ class OpenSlideGenerator(object):
             self.regions_of_label_slide[label] = []
             for i in range(len(self.structure)):
                 self.regions_of_label_slide[label].append([])
-                for j in range(len(self.structure[i])):
-                    if self.label_of_region[i][j] == label:
-                        self.regions_of_label_slide[label][i].append(j)
 
         # load slides
         for name in self.slide_names:
@@ -194,6 +191,8 @@ class OpenSlideGenerator(object):
                     self.shifted_structure[i][j] = [] # collapsed to a point
                 else:
                     self.shifted_structure[i][j] = shifted_region[0]
+                    label = self.label_of_region[i][j]
+                    self.regions_of_label_slide[label][i].append(j)
 
         # region triangulation
         total_region_count = 0
@@ -453,7 +452,7 @@ class OpenSlideGenerator(object):
             elif self.fetch_mode == 'label-slide':
                 if loop_count % 100 == 0: # prevent bias
                     while True:
-                        label = random.choice(list(self.label_weights.keys()))
+                        label = random.choice(self.labels)
                         slide_id = random.randint(0, len(self.structure) - 1)
                         if len(self.regions_of_label_slide[label][slide_id]) > 0:
                             break
