@@ -451,8 +451,8 @@ class OpenSlideGenerator(object):
                 slide_id, region_id, tri_id = self._get_random_index_label(label)
             elif self.fetch_mode == 'label-slide':
                 if loop_count % 100 == 0: # prevent bias
+                    label = random.choice(self.labels)
                     while True:
-                        label = random.choice(self.labels)
                         slide_id = random.randint(0, len(self.structure) - 1)
                         if len(self.regions_of_label_slide[label][slide_id]) > 0:
                             break
