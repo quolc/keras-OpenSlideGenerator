@@ -13,7 +13,8 @@ import openslide_generator
 
 # create generator instance
 gen_train = openslide_generator.OpenSlideGenerator(
-        './train.txt', './test_slides', 512, 256, blur=10, he_augmentation=True)
+        './train.txt', './test_slides', 512, 256,
+        blur=10, he_augmentation=True, color_matching='./color_matching_test.jpg')
 gen_val = openslide_generator.OpenSlideGenerator(
         './val.txt', './test_slides', 512, 256)
 

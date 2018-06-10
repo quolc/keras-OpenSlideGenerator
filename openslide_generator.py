@@ -19,6 +19,7 @@ class OpenSlideGenerator(object):
 
     def __init__(self, path, root, src_size, patch_size, fetch_mode='area',
                  rotation=True, flip=False, blur=0, he_augmentation=False, scale_augmentation=False,
+                 color_matching=None,
                  dump_patch=None, verbose=1):
         self.path = path
         self.root = root
@@ -34,6 +35,11 @@ class OpenSlideGenerator(object):
         self.scale_augmentation = scale_augmentation
         self.dump_patch = dump_patch
         self.verbose = verbose
+
+        self.use_color_matching = False
+        if color_matching is not None:
+            self.match_color_prepare(cv2.imread(color_matching) / 255.0)
+            self.use_color_matching = True
 
         self.slide_names = []
         self.labels = []
@@ -515,6 +521,10 @@ class OpenSlideGenerator(object):
             result = result[:, :, ::-1]
         result *= (1.0 / 255.0)
 
+        # color matching
+        if self.use_color_matching:
+            result = self.match_color(result.transpose(1,2,0)).transpose(2,0,1)
+
         # blurring effect
         if self.blur > 0:
             blur_size = random.randint(1, self.blur)
@@ -553,3 +563,47 @@ class OpenSlideGenerator(object):
             images = np.asarray(images, dtype=np.float32)
             labels = np.asarray(labels, dtype=np.float32)
             yield images, labels
+
+    # Neural color transfer by github.com/htoyryla, and github.com/ProGamerGov
+    # https://github.com/ProGamerGov/Neural-Tools
+    # https://github.com/leongatys/NeuralImageSynthesis/blob/master/ExampleNotebooks/ScaleControl.ipynb
+    def match_color_prepare(self, source_img, eps=1e-5):
+        self.mu_s = source_img.mean(0).mean(0)
+        s = source_img - self.mu_s
+        s = s.transpose(2, 0, 1).reshape(3, -1)
+        self.Cs = s.dot(s.T) / s.shape[1] + eps * np.eye(s.shape[0])
+        self.chol_s = np.linalg.cholesky(self.Cs)
+
+        eva_s, eve_s = np.linalg.eigh(self.Cs)
+        self.Qs = eve_s.dot(np.sqrt(np.diag(eva_s))).dot(eve_s.T)
+
+    def match_color(self, target_img, mode='pca', eps=1e-5):
+        '''
+        Matches the colour distribution of the target image to that of the source image
+        using a linear transform.
+        Images are expected to be of form (w,h,c) and float in [0,1].
+        Modes are chol, pca or sym for different choices of basis.
+        '''
+        mu_t = target_img.mean(0).mean(0)
+        t = target_img - mu_t
+        t = t.transpose(2, 0, 1).reshape(3, -1)
+        Ct = t.dot(t.T) / t.shape[1] + eps * np.eye(t.shape[0])
+        if mode == 'chol':
+            chol_t = np.linalg.cholesky(Ct)
+            ts = self.chol_s.dot(np.linalg.inv(chol_t)).dot(t)
+        if mode == 'pca':
+            eva_t, eve_t = np.linalg.eigh(Ct)
+            Qt = eve_t.dot(np.sqrt(np.diag(eva_t))).dot(eve_t.T)
+            ts = self.Qs.dot(np.linalg.inv(Qt)).dot(t)
+        if mode == 'sym':
+            eva_t, eve_t = np.linalg.eigh(Ct)
+            Qt = eve_t.dot(np.sqrt(np.diag(eva_t))).dot(eve_t.T)
+            Qt_Cs_Qt = Qt.dot(self.Cs).dot(Qt)
+            eva_QtCsQt, eve_QtCsQt = np.linalg.eigh(Qt_Cs_Qt)
+            QtCsQt = eve_QtCsQt.dot(np.sqrt(np.diag(eva_QtCsQt))).dot(eve_QtCsQt.T)
+            ts = np.linalg.inv(Qt).dot(QtCsQt).dot(np.linalg.inv(Qt)).dot(t)
+        matched_img = ts.reshape(*target_img.transpose(2, 0, 1).shape).transpose(1, 2, 0)
+        matched_img += self.mu_s
+        matched_img[matched_img > 1] = 1
+        matched_img[matched_img < 0] = 0
+        return matched_img
