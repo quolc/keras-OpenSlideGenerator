@@ -472,7 +472,7 @@ class OpenSlideGenerator(object):
         if q - i < self.p_label[self.label_to_use][label][i]:
             return self.serialized_index_label[self.label_to_use][label][i]
         else:
-            return self.serialized_index_label[self.label_to_use][label][self.a_label[label][i]]
+            return self.serialized_index_label[self.label_to_use][label][self.a_label[self.label_to_use][label][i]]
 
     # get random triangle index which has specific a label in a slide.
     def _get_random_index_label_slide(self, label, slide):
