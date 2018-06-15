@@ -550,6 +550,9 @@ class OpenSlideGenerator(object):
         return result, self.label_of_region[slide_id][region_id], (slide_id, region_id, posx, posy)
 
     def get_examples_of_slide_label(self, slide_id, label, count):
+        if len(self.regions_of_label_slide[label][slide_id]) == 0:
+            return []
+
         results = []
         for _ in range(count):
             loop_count = 0
