@@ -353,6 +353,15 @@ class OpenSlideGenerator(object):
         # Walker's alias method for weighted sampling of triangles
         def walker_precomputation(probs):
             EPS = 1e-10
+
+            # normalization
+            prob_sum = 0
+            for prob in probs:
+                prob_sum += prob
+            prob_sum *= (1 + EPS)
+            for i in range(len(probs)):
+                probs[i] /= prob_sum
+
             a = [-1] * len(probs)
             p = [0] * len(probs)
             fixed = 0
@@ -370,8 +379,13 @@ class OpenSlideGenerator(object):
                             if p[j] != 0 and a[j] == -1:
                                 a[j] = i
                                 probs[i] -= (1.0 - p[j]) / len(probs)
-                            if probs[i] * len(probs) <= 1.0:
+                            if probs[i] * len(probs) <= (1.0 + EPS):
                                 break
+
+            # fill -1 a
+            for i in range(len(probs)):
+                if a[i] == -1:
+                    a[i] = i
             return a, p
 
         # pre-computation for 'area' mode - all triangles are treated in single array
