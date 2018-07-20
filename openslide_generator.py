@@ -15,10 +15,15 @@ import keras
 
 
 class SimpleOpenSlideGenerator(object):
-    def __init__(self):
-        pass
 
-    def fetch_patches_from_slide(self, wsi_filepath, count, src_size=512, patch_size=512, tissue_threshold=0.8):
+    def __init__(self, color_matching=None):
+        self.use_color_matching = False
+        if color_matching is not None:
+            self.match_color_prepare(cv2.imread(color_matching) / 255.0)
+            self.use_color_matching = True
+
+    def fetch_patches_from_slide(self, wsi_filepath, count, src_size=512, patch_size=512, tissue_threshold=0.8,
+                                 blur=0, he_augmentation=False):
         slide = OpenSlide(wsi_filepath)
 
         # load image with lower resolution
@@ -80,9 +85,74 @@ class SimpleOpenSlideGenerator(object):
 
             result = rotated[int(crop_size / 2 - src_size / 2):int(crop_size / 2 + src_size / 2), \
                      int(crop_size / 2 - src_size / 2):int(crop_size / 2 + src_size / 2)]
-            result = cv2.resize(result, (patch_size, patch_size)).transpose((2, 0, 1))
-            ret_images.append(result)
+            result = cv2.resize(result, (patch_size, patch_size)).transpose((2, 0, 1)) / 255
+
+            # color matching
+            if self.use_color_matching:
+                result = self.match_color(result.transpose(1, 2, 0)).transpose(2, 0, 1)
+
+            # blurring effect
+            if blur > 0:
+                blur_size = random.randint(1, blur)
+                result = cv2.blur(result.transpose(1, 2, 0), (blur_size, blur_size)).transpose((2, 0, 1))
+
+            if he_augmentation:
+                hed = rgb2hed(np.clip(result.transpose(1, 2, 0), -1.0, 1.0))
+                ah = 0.95 + random.random() * 0.1
+                bh = -0.05 + random.random() * 0.1
+                ae = 0.95 + random.random() * 0.1
+                be = -0.05 + random.random() * 0.1
+                hed[:, :, 0] = ah * hed[:, :, 0] + bh
+                hed[:, :, 1] = ae * hed[:, :, 1] + be
+                result = hed2rgb(hed).transpose(2, 0, 1)
+
+            ret_images.append(np.clip(result, 1e-7, 1.0-1e-7))
+
         return ret_images
+
+    # Neural color transfer by github.com/htoyryla, and github.com/ProGamerGov
+    # https://github.com/ProGamerGov/Neural-Tools
+    # https://github.com/leongatys/NeuralImageSynthesis/blob/master/ExampleNotebooks/ScaleControl.ipynb
+    def match_color_prepare(self, source_img, eps=1e-5):
+        self.mu_s = source_img.mean(0).mean(0)
+        s = source_img - self.mu_s
+        s = s.transpose(2, 0, 1).reshape(3, -1)
+        self.Cs = s.dot(s.T) / s.shape[1] + eps * np.eye(s.shape[0])
+        self.chol_s = np.linalg.cholesky(self.Cs)
+
+        eva_s, eve_s = np.linalg.eigh(self.Cs)
+        self.Qs = eve_s.dot(np.sqrt(np.diag(eva_s))).dot(eve_s.T)
+
+    def match_color(self, target_img, mode='pca', eps=1e-5):
+        '''
+        Matches the colour distribution of the target image to that of the source image
+        using a linear transform.
+        Images are expected to be of form (w,h,c) and float in [0,1].
+        Modes are chol, pca or sym for different choices of basis.
+        '''
+        mu_t = target_img.mean(0).mean(0)
+        t = target_img - mu_t
+        t = t.transpose(2, 0, 1).reshape(3, -1)
+        Ct = t.dot(t.T) / t.shape[1] + eps * np.eye(t.shape[0])
+        if mode == 'chol':
+            chol_t = np.linalg.cholesky(Ct)
+            ts = self.chol_s.dot(np.linalg.inv(chol_t)).dot(t)
+        if mode == 'pca':
+            eva_t, eve_t = np.linalg.eigh(Ct)
+            Qt = eve_t.dot(np.sqrt(np.diag(eva_t))).dot(eve_t.T)
+            ts = self.Qs.dot(np.linalg.inv(Qt)).dot(t)
+        if mode == 'sym':
+            eva_t, eve_t = np.linalg.eigh(Ct)
+            Qt = eve_t.dot(np.sqrt(np.diag(eva_t))).dot(eve_t.T)
+            Qt_Cs_Qt = Qt.dot(self.Cs).dot(Qt)
+            eva_QtCsQt, eve_QtCsQt = np.linalg.eigh(Qt_Cs_Qt)
+            QtCsQt = eve_QtCsQt.dot(np.sqrt(np.diag(eva_QtCsQt))).dot(eve_QtCsQt.T)
+            ts = np.linalg.inv(Qt).dot(QtCsQt).dot(np.linalg.inv(Qt)).dot(t)
+        matched_img = ts.reshape(*target_img.transpose(2, 0, 1).shape).transpose(1, 2, 0)
+        matched_img += self.mu_s
+        matched_img[matched_img > 1] = 1
+        matched_img[matched_img < 0] = 0
+        return matched_img.astype(np.float32)
 
 class OpenSlideGenerator(object):
     fetch_modes = ['area', 'slide', 'label', 'label-slide']
