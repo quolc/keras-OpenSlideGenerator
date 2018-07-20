@@ -782,7 +782,7 @@ class OpenSlideGenerator(object):
     def shape(self):
         return (self.patch_size, self.patch_size, 3)
 
-    def flow(self, batch_size=32):
+    def flow(self, batch_size=32, preprocess_input=None):
         while True:
             images = []
             labels = []
@@ -792,7 +792,10 @@ class OpenSlideGenerator(object):
                 labels.append(keras.utils.to_categorical(self.labels[self.label_to_use].index(label), len(self.labels[self.label_to_use])))
             images = np.asarray(images, dtype=np.float32)
             labels = np.asarray(labels, dtype=np.float32)
-            yield images, labels
+            if preprocess_input is not None:
+                yield preprocess_input(images), labels
+            else:
+                yield images, labels
 
     # Neural color transfer by github.com/htoyryla, and github.com/ProGamerGov
     # https://github.com/ProGamerGov/Neural-Tools
