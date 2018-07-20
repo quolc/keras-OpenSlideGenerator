@@ -14,6 +14,76 @@ from skimage.color import rgb2hed, hed2rgb
 import keras
 
 
+class SimpleOpenSlideGenerator(object):
+    def __init__(self):
+        pass
+
+    def fetch_patches_from_slide(self, wsi_filepath, count, src_size=512, patch_size=512, tissue_threshold=0.8):
+        slide = OpenSlide(wsi_filepath)
+
+        # load image with lower resolution
+        desirable_long_edge = 2000
+
+        level_downsample = 0
+        for i, (w, h) in enumerate(slide.level_dimensions):
+            if abs(max(w, h) - desirable_long_edge) < \
+                    abs(max(slide.level_dimensions[level_downsample]) - desirable_long_edge):
+                level_downsample = i
+        magnification = slide.level_downsamples[level_downsample]
+        image_downsample = slide.read_region((0, 0), level_downsample,
+                                             (slide.level_dimensions[level_downsample]))
+
+        # Otsu binarization
+        src = np.average(np.asarray(image_downsample, dtype=np.uint8)[:,:,:3], axis=2)
+        src = 255 - cv2.convertScaleAbs(src)
+        th, binarized = cv2.threshold(src, 0, 255,
+                                      cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+        # dilation
+        kernel = np.ones((2, 2), np.uint8)
+        dilated = cv2.dilate(binarized, kernel, iterations=1)
+
+        ret_images = []
+        src_downsampled_size = 512 / magnification
+        padding = int(src_size / 2 ** 0.5 / magnification) + 10
+        for i in range(count):
+            while True:
+                cx = random.randint(padding, slide.level_dimensions[level_downsample][0] - padding)
+                cy = random.randint(padding, slide.level_dimensions[level_downsample][1] - padding)
+                angle = random.random() * 2 * math.pi
+
+                # crop
+                crop_size = int(src_downsampled_size * 2 ** 0.5 * max(abs(math.cos(angle)), abs(math.sin(angle))))
+                cropped = dilated[int(cy - crop_size / 2):int(cy + crop_size / 2),
+                          int(cx - crop_size / 2):int(cx + crop_size / 2)]
+                mat = cv2.getRotationMatrix2D((crop_size / 2, crop_size / 2),
+                                              45 + 360 * angle / (2 * math.pi), 1)
+                rotated = cv2.warpAffine(cropped, mat, (crop_size, crop_size))
+
+                result = rotated[
+                         int(crop_size / 2 - src_downsampled_size / 2):int(crop_size / 2 + src_downsampled_size / 2), \
+                         int(crop_size / 2 - src_downsampled_size / 2):int(crop_size / 2 + src_downsampled_size / 2)]
+                if np.average(result) / 255 > tissue_threshold:
+                    break
+
+            # transform to raw scale
+            cx = cx * magnification
+            cy = cy * magnification
+
+            # real cropping
+            crop_size = int(src_size * 2 ** 0.5 * max(abs(math.cos(angle)), abs(math.sin(angle))))
+            cropped = np.asarray(slide.read_region((int(cx - crop_size / 2), int(cy - crop_size / 2)),
+                                                   0, (crop_size, crop_size)), dtype=np.float32)[:, :, :3]
+            mat = cv2.getRotationMatrix2D((crop_size / 2, crop_size / 2),
+                                          45 + 360 * angle / (2 * math.pi), 1)
+            rotated = cv2.warpAffine(cropped, mat, (crop_size, crop_size))
+
+            result = rotated[int(crop_size / 2 - src_size / 2):int(crop_size / 2 + src_size / 2), \
+                     int(crop_size / 2 - src_size / 2):int(crop_size / 2 + src_size / 2)]
+            result = cv2.resize(result, (patch_size, patch_size)).transpose((2, 0, 1))
+            ret_images.append(result)
+        return ret_images
+
 class OpenSlideGenerator(object):
     fetch_modes = ['area', 'slide', 'label', 'label-slide']
 
