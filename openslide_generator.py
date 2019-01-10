@@ -39,7 +39,12 @@ class SimpleOpenSlideGenerator(object):
                                              (slide.level_dimensions[level_downsample]))
 
         # Otsu binarization
+        
+        # set transparent region to white
+        alpha = np.asarray(image_downsample, dtype=np.uint8)[:,:,3]
+        
         src = np.average(np.asarray(image_downsample, dtype=np.uint8)[:,:,:3], axis=2)
+        src[alpha == 0] = 255
         src = 255 - cv2.convertScaleAbs(src)
         th, binarized = cv2.threshold(src, 0, 255,
                                       cv2.THRESH_BINARY + cv2.THRESH_OTSU)
