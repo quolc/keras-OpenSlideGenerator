@@ -23,7 +23,7 @@ class SimpleOpenSlideGenerator(object):
             self.use_color_matching = True
 
     def fetch_patches_from_slide(self, wsi_filepath, count, src_size=512, patch_size=512, tissue_threshold=0.8,
-                                 blur=0, he_augmentation=False):
+                                 blur=0, he_augmentation=False, rotations=None):
         slide = OpenSlide(wsi_filepath)
 
         # load image with lower resolution
@@ -57,6 +57,7 @@ class SimpleOpenSlideGenerator(object):
         src_downsampled_size = 512 / magnification
         padding = int(src_size / 2 ** 0.5 / magnification) + 10
         for i in range(count):
+            # select region to crop using tissue binary map
             while True:
                 cx = random.randint(padding, slide.level_dimensions[level_downsample][0] - padding)
                 cy = random.randint(padding, slide.level_dimensions[level_downsample][1] - padding)
@@ -81,37 +82,53 @@ class SimpleOpenSlideGenerator(object):
             cy = cy * magnification
 
             # real cropping
-            crop_size = int(src_size * 2 ** 0.5 * max(abs(math.cos(angle)), abs(math.sin(angle))))
-            cropped = np.asarray(slide.read_region((int(cx - crop_size / 2), int(cy - crop_size / 2)),
-                                                   0, (crop_size, crop_size)), dtype=np.float32)[:, :, :3]
-            mat = cv2.getRotationMatrix2D((crop_size / 2, crop_size / 2),
-                                          45 + 360 * angle / (2 * math.pi), 1)
-            rotated = cv2.warpAffine(cropped, mat, (crop_size, crop_size))
+            angles = [angle]
+            if rotations is not None:
+                for rot in rotations:
+                    angles.append(angle + rot / 180 * math.pi)
 
-            result = rotated[int(crop_size / 2 - src_size / 2):int(crop_size / 2 + src_size / 2), \
-                     int(crop_size / 2 - src_size / 2):int(crop_size / 2 + src_size / 2)]
-            result = cv2.resize(result, (patch_size, patch_size)).transpose((2, 0, 1)) / 255
+            def crop(angle):
+                crop_size = int(src_size * 2 ** 0.5 * max(abs(math.cos(angle)), abs(math.sin(angle))))
+                cropped = np.asarray(slide.read_region((int(cx - crop_size / 2), int(cy - crop_size / 2)),
+                                                       0, (crop_size, crop_size)), dtype=np.float32)[:, :, :3]
+                mat = cv2.getRotationMatrix2D((crop_size / 2, crop_size / 2),
+                                              45 + 360 * angle / (2 * math.pi), 1)
+                rotated = cv2.warpAffine(cropped, mat, (crop_size, crop_size))
+
+                result = rotated[int(crop_size / 2 - src_size / 2):int(crop_size / 2 + src_size / 2), \
+                         int(crop_size / 2 - src_size / 2):int(crop_size / 2 + src_size / 2)]
+                result = cv2.resize(result, (patch_size, patch_size)).transpose((2, 0, 1)) / 255
+                return result
+
+            results = [crop(angle) for angle in angles]
 
             # color matching
             if self.use_color_matching:
-                result = self.match_color(result.transpose(1, 2, 0)).transpose(2, 0, 1)
+                results = [self.match_color(result.transpose(1, 2, 0)).transpose(2, 0, 1) for result in results]
 
             # blurring effect
             if blur > 0:
                 blur_size = random.randint(1, blur)
-                result = cv2.blur(result.transpose(1, 2, 0), (blur_size, blur_size)).transpose((2, 0, 1))
+                results = [cv2.blur(result.transpose(1, 2, 0), (blur_size, blur_size)).transpose((2, 0, 1)) for result in results]
 
             if he_augmentation:
-                hed = rgb2hed(np.clip(result.transpose(1, 2, 0), -1.0, 1.0))
-                ah = 0.95 + random.random() * 0.1
-                bh = -0.05 + random.random() * 0.1
-                ae = 0.95 + random.random() * 0.1
-                be = -0.05 + random.random() * 0.1
-                hed[:, :, 0] = ah * hed[:, :, 0] + bh
-                hed[:, :, 1] = ae * hed[:, :, 1] + be
-                result = hed2rgb(hed).transpose(2, 0, 1)
+                def he_aug(result):
+                    hed = rgb2hed(np.clip(result.transpose(1, 2, 0), -1.0, 1.0))
+                    ah = 0.95 + random.random() * 0.1
+                    bh = -0.05 + random.random() * 0.1
+                    ae = 0.95 + random.random() * 0.1
+                    be = -0.05 + random.random() * 0.1
+                    hed[:, :, 0] = ah * hed[:, :, 0] + bh
+                    hed[:, :, 1] = ae * hed[:, :, 1] + be
+                    result = hed2rgb(hed).transpose(2, 0, 1)
+                    return result
+                results = [he_aug(result) for result in results]
 
-            ret_images.append(np.clip(result, 1e-7, 1.0-1e-7))
+            if rotations is None:
+                ret_images.append(np.clip(results[0], 1e-7, 1.0-1e-7))
+            else:
+                results = [np.clip(result, 1e-7, 1.0-1e-7) for result in results]
+                ret_images.append(tuple(results))
 
         return ret_images
 
